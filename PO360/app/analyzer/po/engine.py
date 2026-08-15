@@ -41,6 +41,51 @@ def _state_from_address(address: str) -> str:
     return ""
 
 
+def _is_valid_state_region(value: str) -> bool:
+    """Validate that a state_region value is a legitimate Indian state/region.
+    
+    Filters out:
+    - MC/MC- codes (e.g., "MC-01", "MC-5")
+    - Territory markers (e.g., "Territory-North", "Terr-South")
+    - Branch/cluster codes (e.g., "Branch-A", "Cluster-1")
+    - Abbreviations (e.g., "MH", "TN", "DL")
+    - Location codes and numbered locations
+    - Empty or purely numeric values
+    
+    Returns True only if the value matches a known Indian state name.
+    """
+    if not value or not isinstance(value, str):
+        return False
+    
+    value_stripped = value.strip()
+    
+    # Reject common invalid patterns
+    invalid_patterns = [
+        r"^mc[\s-]?\d+",  # MC-01, MC 5, etc.
+        r"^territory[\s-]",  # Territory-North, etc.
+        r"^terr[\s-]",  # Abbreviation of territory
+        r"^branch[\s-]",  # Branch-A, Branch-1, etc.
+        r"^cluster[\s-]",  # Cluster-1, etc.
+        r"^location[\s-]",  # Location-1, etc.
+        r"^l[\s-]?\d+",  # L-01, L 5, etc.
+        r"^zone[\s-]",  # Zone-North, etc.
+        r"^region[\s-]",  # Region-South, etc.
+        r"^\d+$",  # Pure numbers
+        r"^[a-z]{1,2}[\s-]?\d+$",  # Abbreviations with numbers (MH-01, TN-5, etc.)
+    ]
+    
+    for pattern in invalid_patterns:
+        if re.search(pattern, value_stripped, re.IGNORECASE):
+            return False
+    
+    # Only valid if it matches a known Indian state
+    for state in _INDIAN_STATES:
+        if value_stripped.lower() == state.lower():
+            return True
+    
+    return False
+
+
 def _email_distribution_map(body: str) -> dict[str, dict[str, str]]:
     """Parse a flattened MC/PO/address/contact table using PO number as key."""
     lines = [_clean_line(line) for line in (body or "").splitlines()]
@@ -84,6 +129,30 @@ def _received_at_utc_iso(message: MailMessage) -> str:
     if dt.tzinfo is not None:
         dt = dt.astimezone(timezone.utc)
     return dt.isoformat()
+
+
+def _detect_equal_distribution_count(text: str) -> int:
+    """Detect if text mentions equal distribution across N branches/MCs.
+    
+    Returns the count of branches if found (e.g., "PO for 5 MCs" returns 5),
+    or 0 if not found.
+    """
+    if not text:
+        return 0
+    # Look for patterns like "5 MCs", "5 branches", "all 5", etc.
+    patterns = [
+        r"\b(\d+)\s*(?:MC|MCs|branch|branches|location|locations)\b",
+        r"\bfor\s+(\d+)\s*(?:unit|units|place|places)",
+        r"\bequally\s+to\s+(\d+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            try:
+                return int(match.group(1))
+            except (ValueError, AttributeError):
+                pass
+    return 0
 
 
 class POEngine:
@@ -156,7 +225,8 @@ class POEngine:
             if fallback_number:
                 pos = [{
                     "po_number": fallback_number, "is_existing_po": fallback_number in self.known_po_numbers(message.thread_id),
-                    "company_name": "", "sent_by": message.sender, "po_datetime": "", "total_goods": "",
+                    "company_name": "", "from_company": "", "to_company": "", "sent_by": message.sender, 
+                    "po_datetime": "", "total_goods": "",
                     "distributions": [],
                 }]
 
@@ -180,6 +250,8 @@ class POEngine:
             self.db.upsert_po_details({
                 "po_number": po_number,
                 "company_name": po.get("company_name") or "",
+                "from_company": po.get("from_company") or "",
+                "to_company": po.get("to_company") or "",
                 "sent_by": po.get("sent_by") or message.sender,
                 "po_datetime": po.get("po_datetime") or received_iso,
                 "total_goods": po.get("total_goods") or "",
@@ -203,16 +275,57 @@ class POEngine:
                     "on_hold": any(bool(distribution.get("on_hold")) for distribution in distributions),
                 }]
 
+            # Handle equal distribution: if email mentions "N branches" but only provides
+            # 1 address, and we know other addresses for this PO from earlier emails,
+            # replicate the goods across all known addresses.
+            equal_count = _detect_equal_distribution_count(f"{message.subject}\n{message.body_text}")
+            if equal_count > 0 and len(distributions) == 1 and distributions[0].get("goods"):
+                current_addresses = {d.get("address") for d in distributions if d.get("address")}
+                known_addresses = {row["address"] for row in self.db.get_po_distributions(po_number)}
+                known_addresses.update(current_addresses)
+                if len(known_addresses) >= equal_count:
+                    # We have at least as many addresses as mentioned, duplicate distribution
+                    original_goods = distributions[0].get("goods") or ""
+                    base_dist = distributions[0].copy()
+                    distributions = []
+                    for addr in known_addresses:
+                        dist_copy = base_dist.copy()
+                        dist_copy["address"] = addr
+                        distributions.append(dist_copy)
+                    LOGGER.info(
+                        "PO %s: equal distribution detected for %s addresses (email mentioned %s MCs)",
+                        po_number, len(known_addresses), equal_count,
+                    )
+
             for dist in distributions:
                 address = (dist.get("address") or "").strip()
                 if not address:
                     continue
+                
+                # Validate state_region: if it's invalid (e.g., contains MC code, territory, etc.),
+                # attempt to extract a valid state from the address. If extraction fails, leave blank.
+                state_region = dist.get("state_region") or ""
+                if state_region and not _is_valid_state_region(state_region):
+                    extracted_state = _state_from_address(address)
+                    if extracted_state:
+                        LOGGER.info(
+                            "PO %s: invalid state_region '%s' detected; replaced with extracted state '%s' from address",
+                            po_number, state_region, extracted_state,
+                        )
+                        state_region = extracted_state
+                    else:
+                        LOGGER.warning(
+                            "PO %s: invalid state_region '%s' detected; no valid state found in address '%s'; clearing field",
+                            po_number, state_region, address,
+                        )
+                        state_region = ""
+                
                 self.db.upsert_po_distribution({
                     "po_number": po_number,
                     "address_date": dist.get("address_date") or received_iso,
                     "address": address,
                     "goods": dist.get("goods") or "",
-                    "state_region": dist.get("state_region") or "",
+                    "state_region": state_region,
                     "branch_name": dist.get("branch_name") or "",
                     "branch_code": dist.get("branch_code") or "",
                     "branch_manager_name": dist.get("branch_manager_name") or "",
@@ -270,12 +383,30 @@ class POEngine:
             return
         resolved_ids = []
         for row in pending_rows:
+            # Validate state_region: if it's invalid, attempt extraction from address
+            state_region = row["state_region"] or ""
+            address = row["address"] or ""
+            if state_region and not _is_valid_state_region(state_region):
+                extracted_state = _state_from_address(address)
+                if extracted_state:
+                    LOGGER.info(
+                        "PO %s (pending resolve): invalid state_region '%s'; replaced with extracted state '%s'",
+                        po_number, state_region, extracted_state,
+                    )
+                    state_region = extracted_state
+                else:
+                    LOGGER.warning(
+                        "PO %s (pending resolve): invalid state_region '%s'; no valid state found; clearing",
+                        po_number, state_region,
+                    )
+                    state_region = ""
+            
             self.db.upsert_po_distribution({
                 "po_number": po_number,
                 "address_date": row["address_date"],
-                "address": row["address"],
+                "address": address,
                 "goods": row["goods"],
-                "state_region": row["state_region"],
+                "state_region": state_region,
                 "branch_name": row["branch_name"],
                 "branch_code": row["branch_code"],
                 "branch_manager_name": row["branch_manager_name"],

@@ -58,6 +58,8 @@ PO_SCHEMA = {
                     "po_number": {"type": "string"},
                     "is_existing_po": {"type": "boolean"},
                     "company_name": {"type": "string"},
+                    "from_company": {"type": "string"},
+                    "to_company": {"type": "string"},
                     "sent_by": {"type": "string"},
                     "po_datetime": {"type": "string"},
                     "total_goods": {"type": "string"},
@@ -152,6 +154,50 @@ Formatting rules:
 - Only ever put ONE distribution per address in the array for a given PO; if
   the same address appears multiple times in this single email, merge it into
   one entry.
+- "state_region" MUST be extracted ONLY from the actual geographic/administrative
+  state or region name found within the delivery address. CRITICAL RULES:
+  * ONLY extract genuine Indian state/region names (e.g., "Delhi", "Maharashtra",
+    "Gujarat", "Karnataka", "Tamil Nadu", "Uttar Pradesh", etc.)
+  * DO NOT extract or include: branch names, MC (Management Center) names,
+    territory codes, location codes (e.g., "MC-01", "Territory-North", "Branch-A"),
+    or abbreviations like "TN", "MH", "UP"
+  * If the address mentions both a state AND a branch/MC name, ONLY extract
+    the state name and leave branch/MC/territory information for the branch_name
+    field instead
+  * If the address contains no recognizable Indian state name, leave state_region
+    blank (do NOT fill with branch name, territory, or location code as a fallback)
+  * Examples of CORRECT extraction:
+    - Address: "Store #12, Delhi" → state_region: "Delhi"
+    - Address: "Placed with MAVA, Mumbai" → state_region: "Mumbai"
+    - Address: "Territory-South, Bangalore, Karnataka" → state_region: "Karnataka"
+    - Address: "MC-05, Pune" → state_region: "Pune"
+  * Examples of INCORRECT extraction (DO NOT DO THIS):
+    - Address: "MC-05, Mumbai" → DO NOT put "MC-05" in state_region
+    - Address: "Territory-North, Delhi" → DO NOT put "Territory-North" in state_region
+    - Address: "Branch Alpha, Chennai" → DO NOT put "Branch Alpha" in state_region
+- When a PO states it is for multiple branches (e.g., "This PO covers 5 MCs"),
+  but provides only partial address information in that email, still return
+  only the address(es) explicitly mentioned - do not fabricate additional
+  branches. The equal distribution logic will be handled at import time if
+  thread context includes other known addresses for the same PO.
+- "from_company": Extract the company name FROM WHICH the PO is received/sent.
+  This is typically found in:
+    * The PO document header/title (e.g., "PO from ABC Corporation")
+    * The company letterhead/branding on the PO attachment
+    * Sender's company affiliation if they are representing a company
+  If you see text like "from ABC Corporation" or "PO by XYZ Ltd", extract that
+  as from_company. Leave blank if no explicit source company is mentioned.
+- "to_company": Extract the company name TO WHICH the PO is directed/placed.
+  This is typically found in:
+    * Recipient or delivery-to company name
+    * Text like "placed with [COMPANY_NAME]" or "for [COMPANY_NAME]"
+    * The company that will be working on/fulfilling the PO
+  If you see wording like "placed with MAVA INTERNATIONAL" or "PO for XYZ Ltd",
+  extract that as to_company. Leave blank if no explicit recipient company is
+  mentioned.
+- company_name: For backward compatibility, populate this with whichever of
+  from_company or to_company is more prominent, or from_company if both are
+  equally prominent.
 """.strip()
 
 
