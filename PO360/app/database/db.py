@@ -67,6 +67,8 @@ CREATE TABLE IF NOT EXISTS po_details (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     po_number TEXT NOT NULL UNIQUE,
     company_name TEXT,
+    from_company TEXT,
+    to_company TEXT,
     sent_by TEXT,
     po_datetime TEXT,
     total_goods TEXT,
@@ -214,6 +216,8 @@ class Database:
         for table, column, ddl in (
             ("po_details", "last_source_received_at", "ALTER TABLE po_details ADD COLUMN last_source_received_at TEXT"),
             ("po_distribution", "last_source_received_at", "ALTER TABLE po_distribution ADD COLUMN last_source_received_at TEXT"),
+            ("po_details", "from_company", "ALTER TABLE po_details ADD COLUMN from_company TEXT"),
+            ("po_details", "to_company", "ALTER TABLE po_details ADD COLUMN to_company TEXT"),
         ):
             existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
             if column not in existing:
@@ -361,17 +365,18 @@ class Database:
         now = utc_now()
         with self.transaction() as conn:
             conn.execute(
-                f"""INSERT INTO po_details(po_number,company_name,sent_by,po_datetime,total_goods,thread_id,
+                f"""INSERT INTO po_details(po_number,company_name,from_company,to_company,sent_by,po_datetime,total_goods,thread_id,
                     primary_email,source_email_id,last_source_received_at,created_at,updated_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(po_number) DO UPDATE SET
-                {_time_ordered_update_clause('po_details', ['company_name', 'sent_by', 'po_datetime', 'total_goods'], 'last_source_received_at')},
+                {_time_ordered_update_clause('po_details', ['company_name', 'from_company', 'to_company', 'sent_by', 'po_datetime', 'total_goods'], 'last_source_received_at')},
                 thread_id=COALESCE(po_details.thread_id, excluded.thread_id),
                 primary_email=COALESCE(po_details.primary_email, excluded.primary_email),
                 source_email_id=COALESCE(po_details.source_email_id, excluded.source_email_id),
                 updated_at=excluded.updated_at""",
                 (
-                    po["po_number"], po.get("company_name") or "", po.get("sent_by") or "",
+                    po["po_number"], po.get("company_name") or "", po.get("from_company") or "",
+                    po.get("to_company") or "", po.get("sent_by") or "",
                     po.get("po_datetime") or "", po.get("total_goods") or "", po.get("thread_id"),
                     po.get("primary_email"), po.get("source_email_id"), po.get("last_source_received_at"), now, now,
                 ),
@@ -530,7 +535,12 @@ class Database:
     def export_po_details(self, from_iso: str, to_iso: str) -> list[sqlite3.Row]:
         with self.connect() as conn:
             return conn.execute(
-                "SELECT * FROM po_details WHERE updated_at BETWEEN ? AND ? ORDER BY updated_at",
+                """SELECT pd.id, pd.po_number, pd.company_name, pd.from_company, pd.to_company,
+                          pd.sent_by, ed.received_at as po_date, pd.total_goods, pd.primary_email
+                   FROM po_details pd
+                   LEFT JOIN email_details ed ON pd.source_email_id = ed.id
+                   WHERE pd.updated_at BETWEEN ? AND ?
+                   ORDER BY pd.updated_at""",
                 (from_iso, to_iso),
             ).fetchall()
 

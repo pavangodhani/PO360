@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -172,12 +172,14 @@ class ApplicationRunner:
                     "po_number": extracted_po.get("po_number") or "",
                     "is_existing_po": bool(extracted_po.get("is_existing_po")),
                     "company_name": "",
+                    "from_company": "",
+                    "to_company": "",
                     "sent_by": "",
                     "po_datetime": "",
                     "total_goods": "",
                     "distributions": [],
                 })
-                for field in ("company_name", "sent_by", "po_datetime", "total_goods"):
+                for field in ("company_name", "from_company", "to_company", "sent_by", "po_datetime", "total_goods"):
                     if extracted_po.get(field):
                         current[field] = extracted_po[field]
                 current["is_existing_po"] = current["is_existing_po"] or bool(extracted_po.get("is_existing_po"))
@@ -299,12 +301,12 @@ class ApplicationRunner:
     # ------------------------------------------------------------------
     # Mailbox-level processing
     # ------------------------------------------------------------------
-    def _config_tz(self) -> ZoneInfo:
+    def _config_tz(self):
         try:
             return ZoneInfo(self.config.timezone)
         except Exception:
-            LOGGER.warning("Unknown timezone '%s' in config; falling back to UTC", self.config.timezone)
-            return ZoneInfo("UTC")
+            LOGGER.warning("Unknown or unavailable timezone '%s' in config; falling back to UTC", self.config.timezone)
+            return timezone.utc
 
     def _localize(self, dt: datetime) -> datetime:
         """Attach the configured timezone to a naive datetime, or leave an

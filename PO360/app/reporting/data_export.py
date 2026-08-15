@@ -39,34 +39,50 @@ LOGGER = logging.getLogger(__name__)
 # 18:30:00") rather than raw ISO8601.
 DISPLAY_DATETIME_FORMAT = "%d %b %Y %H:%M:%S"
 FILENAME_DATETIME_FORMAT = "%d-%b-%Y_%H-%M-%S"
+DATE_ONLY_FORMAT = "%d %b %Y"
 
+# Columns to export for each sheet. Technical columns (thread_id, created_at,
+# updated_at, source_email_id, status) are excluded per client feedback.
 SHEETS: list[tuple[str, str, list[str]]] = [
     ("PO Details", "export_po_details", [
-        "id", "po_number", "company_name", "sent_by", "po_datetime", "total_goods",
-        "thread_id", "primary_email", "source_email_id", "created_at", "updated_at",
+        "id", "po_number", "from_company", "to_company", "sent_by", "po_date", "total_goods",
+        "primary_email",
     ]),
     ("PO Distribution", "export_po_distribution", [
         "id", "po_number", "address_date", "address", "goods", "state_region",
         "branch_name", "branch_code", "branch_manager_name", "branch_manager_contact",
-        "status", "source_email_id", "created_at", "updated_at",
     ]),
     ("PO Logs", "export_po_logs", [
         "id", "po_number", "email_date", "email_sender", "email_subject",
-        "email_conclusion", "source_email_id", "created_at",
+        "email_conclusion",
     ]),
     ("Email Details", "export_email_details", [
-        "id", "primary_email", "message_id", "thread_id", "subject", "sender_email",
+        "id", "primary_email", "message_id", "subject", "sender_email",
         "to_recipients", "cc_recipients", "received_at", "attachment_count",
         "attachment_names", "is_po_related", "po_remarks", "po_confidence",
-        "processing_status", "processing_error", "processed_at", "created_at", "updated_at",
+        "processing_error",
     ]),
 ]
 
+# Date/time columns that should be formatted as date-only (no time component)
+DATE_ONLY_COLUMNS = {
+    "po_date", "address_date", "email_date", "received_at",
+}
+
 
 def _cell_value(row: Any, column: str) -> Any:
+    """Extract and format a cell value. Handle date-only formatting and bool conversion."""
     value = row[column]
     if column in {"is_po_related"} and value is not None:
         return "Yes" if value else "No"
+    # Format date/time columns as date-only (remove time component)
+    if column in DATE_ONLY_COLUMNS and value is not None:
+        try:
+            if isinstance(value, str) and len(value) > 10:  # ISO format with time
+                dt = datetime.fromisoformat(value)
+                return dt.strftime(DATE_ONLY_FORMAT)
+        except (ValueError, AttributeError):
+            pass
     return value
 
 
@@ -126,6 +142,14 @@ def _style_sheet(ws) -> None:
     if ws.max_row >= 1:
         ws.auto_filter.ref = ws.dimensions
 
+    # Columns that need minimum width for readability (especially on Windows)
+    MIN_COL_WIDTHS = {
+        "email_conclusion": 35,
+        "remarks": 30,
+        "address": 30,
+        "email_subject": 30,
+    }
+
     for cell in ws[1]:
         cell.font = Font(bold=True)
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -136,11 +160,13 @@ def _style_sheet(ws) -> None:
             cell.alignment = Alignment(vertical="top", wrap_text=True)
 
     for col_cells in ws.columns:
+        header = col_cells[0].value or ""
+        min_width = MIN_COL_WIDTHS.get(str(header), 12)
         max_len = 0
         for cell in col_cells:
             value = "" if cell.value is None else str(cell.value)
             max_len = max(max_len, min(len(value), 60))
-        width = max(12, min(max_len + 2, 60))
+        width = max(min_width, min(max_len + 2, 60))
         ws.column_dimensions[get_column_letter(col_cells[0].column)].width = width
 
     ws.row_dimensions[1].height = 32

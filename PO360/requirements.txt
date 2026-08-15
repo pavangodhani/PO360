@@ -6,6 +6,7 @@ PyMuPDF==1.26.4
 Pillow==11.3.0
 beautifulsoup4==4.13.4
 python-dateutil==2.9.0.post0
+tzdata==2025.2
 
 # Test dependency
 pytest==8.4.1
