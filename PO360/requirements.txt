@@ -1,0 +1,11 @@
+# Runtime dependencies
+openpyxl==3.1.5
+requests==2.32.4
+pydantic==2.11.7
+PyMuPDF==1.26.4
+Pillow==11.3.0
+beautifulsoup4==4.13.4
+python-dateutil==2.9.0.post0
+
+# Test dependency
+pytest==8.4.1

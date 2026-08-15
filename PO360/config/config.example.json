@@ -1,0 +1,53 @@
+{
+  "app_name": "Outlook Email Analyzer",
+  "env": "prod",
+  "timezone": "Asia/Kolkata",
+  "logging": {
+    "level": "INFO",
+    "dir": "logs"
+  },
+  "database": {
+    "path": "data/analyzer.db"
+  },
+  "processing": {
+    "max_emails_per_run": 200,
+    "mark_seen": false,
+    "include_seen_messages": true,
+    "thread_context_limit": 25,
+    "save_raw_emails": true,
+    "raw_email_dir": "data/raw_emails",
+    "attachment_dir": "data/attachments",
+    "retain_attachments": true
+  },
+  "output": {
+    "excel_path": "output/PO_Report.xlsx",
+    "export_dir": "output"
+  },
+  "export": {
+    "from_datetime": "01 Jan 2026 00:00:00",
+    "to_datetime": "31 Dec 2026 23:59:59"
+  },
+  "ai": {
+    "enabled": true,
+    "provider": "gemini_rest",
+    "api_key": "PUT_YOUR_GEMINI_API_KEY_HERE",
+    "model": "gemini-3.5-flash-lite",
+    "timeout_seconds": 90,
+    "max_retries": 3,
+    "retry_backoff_seconds": 2,
+    "max_pdf_bytes": 15728640
+  },
+  "mailboxes": [
+    {
+      "name": "Demo Mailbox",
+      "email": "YOUR_TEST_EMAIL@example.com",
+      "password": "YOUR_PASSWORD",
+      "imap_host": "YOUR_IMAP_HOST",
+      "imap_port": 993,
+      "use_ssl": true,
+      "folder": "INBOX",
+      "enabled": true,
+      "start_datetime": "10 Aug 2026 14:05:00"
+    }
+  ]
+}
